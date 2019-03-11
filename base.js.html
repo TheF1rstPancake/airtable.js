@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: base.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: base.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>'use strict';
+
+var forEach = require('lodash/forEach');
+
+var internalConfig = require('./internal_config.json');
+var Class = require('./class');
+var AirtableError = require('./airtable_error');
+var Table = require('./table');
+var runAction = require('./run_action');
+
+/**
+ * @class Base
+ * @description Creates a new Base object.  This is the first object to create before trying to issue CRUD operations to a specific table within an Airtable base.
+ * @param {String} baseId - the unique ID of the base you want to perform operations on 
+ */
+var Base = Class.extend({
+    init: function(airtable, baseId) {
+        this._airtable = airtable;
+        this._id = baseId;
+    },
+
+    /** 
+     * @function table
+     * @memberOf Base
+     * @description Create a new {@link Table} object. Use {@link Table} objects to issue CRUD operations to a particular table
+     * @param {String} tableName - the name of the table in your base
+     * @returns {Table} 
+     */
+    table: function(tableName) {
+        return new Table(this, null, tableName);
+    },
+
+    runAction: function(method, path, queryParams, bodyData, callback) {
+        runAction(this, method, path, queryParams, bodyData, callback);
+    },
+
+    _checkStatusForError: function(statusCode, body) {
+        if (statusCode === 401) {
+            return new AirtableError('AUTHENTICATION_REQUIRED', 'You should provide valid api key to perform this operation', statusCode);
+        } else if (statusCode === 403) {
+            return new AirtableError('NOT_AUTHORIZED', 'You are not authorized to perform this operation', statusCode);
+        } else if (statusCode === 404) {
+            return (function(){
+                var message = (body &amp;&amp; body.error &amp;&amp; body.error.message) ? body.error.message : 'Could not find what you are looking for';
+                return new AirtableError('NOT_FOUND', message, statusCode);
+            })();
+        } else if (statusCode === 413) {
+            return new AirtableError('REQUEST_TOO_LARGE', 'Request body is too large', statusCode);
+        } else if (statusCode === 422) {
+            return (function(){
+                var type = (body &amp;&amp; body.error &amp;&amp; body.error.type) ? body.error.type : 'UNPROCESSABLE_ENTITY';
+                var message = (body &amp;&amp; body.error &amp;&amp; body.error.message) ? body.error.message : 'The operation cannot be processed';
+                return new AirtableError(type, message, statusCode);
+            })();
+        } else if (statusCode === 429) {
+            return new AirtableError('TOO_MANY_REQUESTS', 'You have made too many requests in a short period of time. Please retry your request later', statusCode);
+        }else if (statusCode === 500) {
+            return new AirtableError('SERVER_ERROR', 'Try again. If the problem persists, contact support.', statusCode);
+        } else if (statusCode === 503) {
+            return new AirtableError('SERVICE_UNAVAILABLE', 'The service is temporarily unavailable. Please retry shortly.', statusCode);
+        } else if (statusCode >= 400) {
+            return (function(){
+                var type = (body &amp;&amp; body.error &amp;&amp; body.error.type) ? body.error.type : 'UNEXPECTED_ERROR';
+                var message = (body &amp;&amp; body.error &amp;&amp; body.error.message) ? body.error.message : 'An unexpected error occurred';
+                return new AirtableError(type, message, statusCode);
+            })();
+        }
+    },
+
+    doCall: function(tableName) {
+        return this.table(tableName);
+    },
+
+    getId: function() {
+        return this._id;
+    }
+});
+
+Base.createFunctor = function(airtable, baseId) {
+    var base = new Base(airtable, baseId);
+    var baseFn = function() {
+        return base.doCall.apply(base, arguments);
+    };
+    forEach(['table', 'runAction', 'getId'], function(baseMethod) {
+        baseFn[baseMethod] = base[baseMethod].bind(base);
+    });
+    baseFn._base = base;
+    baseFn.tables = base.tables;
+    return baseFn;
+};
+
+module.exports = Base;
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="Base.html">Base</a></li><li><a href="Query.html">Query</a></li><li><a href="Record.html">Record</a></li><li><a href="Table.html">Table</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.5.5</a> on Mon Mar 11 2019 09:30:27 GMT-0700 (Pacific Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

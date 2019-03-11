@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: query.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: query.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>'use strict';
+
+var assert = require('assert');
+var isPlainObject = require('lodash/isPlainObject');
+var isArray = require('lodash/isArray');
+var isFunction = require('lodash/isFunction');
+var isString = require('lodash/isString');
+var isNumber = require('lodash/isNumber');
+var includes = require('lodash/includes');
+var clone = require('lodash/clone');
+var forEach = require('lodash/forEach');
+var map = require('lodash/map');
+var keys = require('lodash/keys');
+
+var check = require('./typecheck');
+var Class = require('./class');
+var Record = require('./record');
+var callbackToPromise = require('./callback_to_promise');
+
+/**
+ * @constructor Query
+ * @description Builds a query object. Does not actually fetch any data until either {@link Query.eachPage}, {@link Query.firstPage}, or {@link Query.all} is called.
+ * @param {Table} table - Airtable table object representing the table we want to query against
+ * @param {Object} params - an associative array containing the different URL parameters for the query.  See {@link https://airtable.com/api} for more details.
+ */
+var Query = Class.extend({
+    
+    init: function(table, params) {
+        assert(isPlainObject(params));
+        forEach(keys(params), function(key) {
+            var value = params[key];
+            assert(Query.paramValidators[key] &amp;&amp; Query.paramValidators[key](value).pass, 'Invalid parameter for Query: ' + key);
+        });
+
+        this._table = table;
+        this._params = params;
+
+        // Public API
+        /**
+         * @function firstPage
+         * @memberOf Query
+         * @description Fetches the first page of results for the query
+         * @param {Query~done} done - a callback to execute once the record is fetched or an error occurs
+         * @returns {null|Promise&lt;Record[]>} executes the callback if present; returns a Promise which contains a list of {@link Record} otherwise
+         */
+        this.firstPage = callbackToPromise(this.firstPage, this);
+
+        /**
+         * @function eachPage
+         * @memberOf Query
+         * @description Fetches each page of results for the query.
+         * 
+         * You must provide the pageCallback to perform actions on each page.  This funciton will be called after each page has been fetched.
+         * 
+         * @param {Query~pageCallback} pageCallback - callback function to parse through a page of records
+         * @param {Query~done} done - callback that fires once all records have been processed or if an error occurs
+         * @returns {null|Promise&lt;Record[]>} executes the "done" callback if present; returns a Promise containing a list of {@link Record} otherwise
+         */
+        this.eachPage = callbackToPromise(this.eachPage, this, 1);
+
+        /**
+         * @function all
+         * @memberOf Query
+         * @description Fetches all records. May take a long time.
+         * 
+         * @param {Query~done} done - callback that fires once all records have been processed or if an error occurs
+         * @returns {null|Promise&lt;Record[]>} executes the callback if present; returns a Promise containing a list of {@link Record} otherwise
+         */
+        this.all = callbackToPromise(this.all, this);
+    },
+
+    firstPage: function(done) {
+        assert(isFunction(done),
+            'The first parameter to `firstPage` must be a function');
+
+        this.eachPage(function(records, fetchNextPage) {
+            done(null, records);
+        }, function(error) {
+            done(error, null);
+        });
+    },
+
+    eachPage: function(pageCallback, done) {
+        assert(isFunction(pageCallback),
+            'The first parameter to `eachPage` must be a function');
+
+        assert(isFunction(done) || (done === void 0),
+            'The second parameter to `eachPage` must be a function or undefined');
+
+        var that = this;
+        var path = '/' + this._table._urlEncodedNameOrId();
+        var params = clone(this._params);
+
+        var inner = function() {
+            that._table._base.runAction('get', path, params, null, function(err, response, result) {
+                if (err) {
+                    done(err, null);
+                } else {
+                    var next;
+                    if (result.offset) {
+                        params.offset = result.offset;
+                        next = inner;
+                    } else {
+                        next = function() {
+                            if (done) {
+                                done(null);
+                            }
+                        };
+                    }
+
+                    var records = map(result.records, function(recordJson) {
+                        return new Record(that._table, null, recordJson);
+                    });
+
+                    pageCallback(records, next);
+                }
+            });
+        };
+
+        inner();
+    },
+    
+    all: function(done) {
+        assert(isFunction(done),
+            'The first parameter to `all` must be a function');
+
+        var allRecords = [];
+        this.eachPage(function(pageRecords, fetchNextPage) {
+            allRecords.push.apply(allRecords, pageRecords);
+            fetchNextPage();
+        }, function(err) {
+            if (err) {
+                done(err, null);
+            } else {
+                done(null, allRecords);
+            }
+        });
+    }
+});
+
+Query.paramValidators = {
+    fields:
+        check(check.isArrayOf(isString), 'the value for `fields` should be an array of strings'),
+
+    filterByFormula:
+        check(isString, 'the value for `filterByFormula` should be a string'),
+
+    maxRecords:
+        check(isNumber, 'the value for `maxRecords` should be a number'),
+
+    pageSize:
+        check(isNumber, 'the value for `pageSize` should be a number'),
+
+    sort:
+        check(check.isArrayOf(function(obj) {
+            return (
+                isPlainObject(obj) &amp;&amp;
+                isString(obj.field) &amp;&amp;
+                ((obj.direction === void 0) || includes(['asc', 'desc'], obj.direction))
+            );
+        }), 'the value for `sort` should be an array of sort objects. ' +
+            'Each sort object must have a string `field` value, and an optional ' +
+            '`direction` value that is "asc" or "desc".'
+        ),
+
+    view:
+        check(isString, 'the value for `view` should be a string'),
+
+    cellFormat:
+        check(function(cellFormat) {
+            return (
+                isString(cellFormat) &amp;&amp;
+                includes(['json', 'string'], cellFormat)
+            );
+        }, 'the value for `cellFormat` should be "json" or "string"'),
+
+    timeZone:
+        check(isString, 'the value for `timeZone` should be a string'),
+
+    userLocale:
+        check(isString, 'the value for `userLocale` should be a string'),
+};
+
+/**
+ * Validates the parameters for passing to the Query constructor.
+ * @private
+ * @param {Object} params - an associative array containing the different URL parameters for the query.  See {@link https://airtable.com/api} for more details.
+ * @return an object with two keys:
+ *  validParams: the object that should be passed to the constructor.
+ *  ignoredKeys: a list of keys that will be ignored.
+ *  errors: a list of error messages.
+ */
+Query.validateParams = function validateParams(params) {
+    assert(isPlainObject(params));
+
+    var validParams = {};
+    var ignoredKeys = [];
+    var errors = [];
+
+    forEach(keys(params), function(key) {
+        var value = params[key];
+        if (Query.paramValidators.hasOwnProperty(key)) {
+            var validator = Query.paramValidators[key];
+            var validationResult = validator(value);
+            if (validationResult.pass) {
+                validParams[key] = value;
+            } else {
+                errors.push(validationResult.error);
+            }
+        } else {
+            ignoredKeys.push(key);
+        }
+    });
+
+    return {
+        validParams: validParams,
+        ignoredKeys: ignoredKeys,
+        errors: errors,
+    };
+};
+
+module.exports = Query;
+
+/**
+ * Callback function for the final results or error of a query
+ * @callback Query~done
+ * @param {Error} error - if the query failed, error will represent the error that occured.  If the query succeeded, error will be null
+ * @param {(null|Record[])} results - If there is an error, this will be null.  If successful and using {@link Query.all} or {@link Query.firstPage}, this will be a list of records matching your query.  If using {@link Query.eachPage} this will be null.
+ * @memberOf Query
+*/
+
+/**
+  * Callback function to process the results of an individual page
+  * @callback Query~pageCallback
+  * @param {Record[]} results - a list of all records that match your query
+  * @param {Function} fetchNextPage - once you process this set of records, you can use this function to fetch the next page of records
+  * @memberOf Query
+*/</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="Base.html">Base</a></li><li><a href="Query.html">Query</a></li><li><a href="Record.html">Record</a></li><li><a href="Table.html">Table</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.5.5</a> on Mon Mar 11 2019 09:30:27 GMT-0700 (Pacific Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
