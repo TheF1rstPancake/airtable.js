@@ -8,7 +8,7 @@
     "pretest": "npm run lint",
     "lint": "grunt jshint",
     "test": "jest --env node",
-    "docs": "node node_modules/jsdoc/jsdoc.js lib README.md -c jsdoc_conf.json"
+    "docs": "node node_modules/jsdoc/jsdoc.js lib README.md -c jsdoc_conf.json -d docs" 
   },
   "dependencies": {
     "lodash": "4.17.11",
